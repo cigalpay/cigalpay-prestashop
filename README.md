@@ -20,9 +20,9 @@ Official PrestaShop module for [CigalPay](https://cigalpay.com): accept crypto p
 
 ## Set up
 
-1. In your CigalPay dashboard, open **Settings → API credentials** and copy your **Account ID** and your **notification signing secret**.
+1. In your CigalPay dashboard, open **Settings → API credentials** and copy your **Account ID**, your **notification signing secret** and, to refund orders in crypto, your **API key**.
 2. In PrestaShop, open **Modules → Module Manager**, find CigalPay and click **Configure**.
-3. Paste both values and save.
+3. Paste the values and save.
 
 CigalPay then appears at checkout for carts in USD or EUR.
 
@@ -46,6 +46,18 @@ If the customer leaves without paying, their order confirmation page has a butto
 
 When PrestaShop splits a cart into several orders, they are paid together with one CigalPay payment.
 
+## Refunds
+
+Refund a CigalPay order the usual way: on the order page, **Partial refund** or **Standard refund**, with a credit slip. The module then refunds the slip's amount in crypto:
+
+1. The amount is converted into the coin the customer paid, at the payment's rate, so they get back the same share of what they sent.
+2. It comes out of your CigalPay balance in that coin, with the network fee.
+3. The customer gets an email with a link to enter the address to refund. CigalPay reviews it and sends the coin.
+
+The order's **Messages** block shows the refund and the customer's link, or why CigalPay refused it, for example when the balance is too low. A payment forwarded to your own wallet isn't on your CigalPay balance: refund it from that wallet. CigalPay's fee on the payment is not refunded.
+
+A refund with **Generate a voucher** ticked is refunded with the voucher only, not in crypto. Turn off **Refund in crypto** in the settings to create credit slips without refunding in crypto.
+
 ## Security
 
 Every notification is checked before it touches an order:
@@ -61,13 +73,13 @@ Errors are logged in **Advanced Parameters → Logs** (search "CigalPay"). Turn 
 ## FAQ
 
 **Can I refund from PrestaShop?**
-Not yet. Send crypto refunds from your CigalPay dashboard or your wallet.
+Yes, with a credit slip, see [Refunds](#refunds). Add your API key in the settings first.
 
 **My shop isn't in USD or EUR.**
 CigalPay is hidden at checkout for other currencies, and the settings page shows a warning.
 
 **What does the module send to CigalPay?**
-The order total and currency, the order reference, the shop name, the return and notification addresses, and the customer's language. No customer names, emails or addresses.
+The order total and currency, the order reference, the shop name, the return and notification addresses, and the customer's language. No customer names, emails or addresses. When you refund an order, the customer's email, so CigalPay can send them the refund link.
 
 ## For developers
 

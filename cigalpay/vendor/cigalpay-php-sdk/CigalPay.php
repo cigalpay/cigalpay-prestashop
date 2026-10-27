@@ -14,6 +14,7 @@ class CigalPay
 {
     const CHECKOUT_URL = 'https://coins-api.cigalpay.com';
     const API_URL = 'https://core-api.cigalpay.com';
+    const MERCHANT_API_URL = 'https://merchant-api.cigalpay.com';
 
     /** Payment statuses sent in notifications. CONFIRMED and FINISHED mean paid. */
     const STATUS_WAITING = 'WAITING';
@@ -33,12 +34,14 @@ class CigalPay
     protected $checkoutUrl;
     /** @var string */
     protected $apiUrl;
+    /** @var string */
+    protected $merchantApiUrl;
     /** @var int */
     protected $timeout;
 
     /**
      * @param array $options accountId (hosted checkouts), apiKey (payment API),
-     *                       checkoutUrl / apiUrl (overrides), timeout (seconds, default 15)
+     *                       checkoutUrl / apiUrl / merchantApiUrl (overrides), timeout (seconds, default 15)
      */
     public function __construct(array $options = [])
     {
@@ -46,6 +49,7 @@ class CigalPay
         $this->apiKey = isset($options['apiKey']) ? $options['apiKey'] : null;
         $this->checkoutUrl = rtrim(isset($options['checkoutUrl']) ? $options['checkoutUrl'] : self::CHECKOUT_URL, '/');
         $this->apiUrl = rtrim(isset($options['apiUrl']) ? $options['apiUrl'] : self::API_URL, '/');
+        $this->merchantApiUrl = rtrim(isset($options['merchantApiUrl']) ? $options['merchantApiUrl'] : self::MERCHANT_API_URL, '/');
         $this->timeout = isset($options['timeout']) ? (int) $options['timeout'] : 15;
     }
 
@@ -121,6 +125,40 @@ class CigalPay
     public function getSupportedCoins()
     {
         return $this->request('GET', $this->apiUrl . '/supportedCoins');
+    }
+
+    // ── Refunds ───────────────────────────────────────────────────────────
+
+    /**
+     * Refund a paid payment. The amount and its network fee come out of your
+     * CigalPay balance in the payment's coin; the customer gets a link to enter
+     * the address to refund (by email when you pass customerEmail), then
+     * CigalPay sends it. Needs `apiKey`.
+     *
+     * @param array $p paymentId, and amount (in the coin paid) or checkoutAmount
+     *                 (in the checkout's USD / EUR, converted at the payment's rate);
+     *                 customerEmail, reason (optional)
+     * @return array ['refund' => [...], 'link' => customer link]
+     */
+    public function createRefund(array $p)
+    {
+        if (empty($p['paymentId'])) {
+            throw new CigalpayException('CigalPay: createRefund needs `paymentId`');
+        }
+        $body = ['paymentId' => (string) $p['paymentId']];
+        foreach (['amount', 'checkoutAmount'] as $k) {
+            if (isset($p[$k])) $body[$k] = (float) $p[$k];
+        }
+        foreach (['customerEmail', 'reason'] as $k) {
+            if (isset($p[$k]) && $p[$k] !== '') $body[$k] = (string) $p[$k];
+        }
+        return $this->request('POST', $this->merchantApiUrl . '/api/refunds', $body, $this->apiHeaders());
+    }
+
+    /** The refunds of a payment, newest first, with their status. */
+    public function getRefunds($paymentId)
+    {
+        return $this->request('GET', $this->merchantApiUrl . '/api/refunds?paymentId=' . rawurlencode($paymentId), null, $this->apiHeaders());
     }
 
     // ── Webhooks ──────────────────────────────────────────────────────────

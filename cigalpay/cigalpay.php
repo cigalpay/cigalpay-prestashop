@@ -28,18 +28,21 @@ class Cigalpay extends PaymentModule
     const CURRENCIES = ['USD', 'EUR'];
     const LANGS = ['en', 'fr', 'es', 'de'];
 
-    /** Configuration keys. CIGALPAY_CHECKOUT_URL is not in the form: tests point it at a local API. */
+    /** Configuration keys. The *_URL ones are not in the form: tests point them at a local API. */
     const CONF_ACCOUNT_ID = 'CIGALPAY_ACCOUNT_ID';
     const CONF_IPN_SECRET = 'CIGALPAY_IPN_SECRET';
+    const CONF_API_KEY = 'CIGALPAY_API_KEY';
+    const CONF_REFUND_ON_SLIP = 'CIGALPAY_REFUND_ON_SLIP';
     const CONF_DEBUG = 'CIGALPAY_DEBUG';
     const CONF_OS_WAITING = 'CIGALPAY_OS_WAITING';
     const CONF_CHECKOUT_URL = 'CIGALPAY_CHECKOUT_URL';
+    const CONF_MERCHANT_API_URL = 'CIGALPAY_MERCHANT_API_URL';
 
     public function __construct()
     {
         $this->name = 'cigalpay';
         $this->tab = 'payments_gateways';
-        $this->version = '1.0.1';
+        $this->version = '1.1.0';
         $this->author = 'CigalPay';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '8.0.0', 'max' => _PS_VERSION_];
@@ -67,6 +70,8 @@ class Cigalpay extends PaymentModule
         return parent::install()
             && $this->registerHook('paymentOptions')
             && $this->registerHook('displayPaymentReturn')
+            && $this->registerHook('actionOrderSlipAdd')
+            && Configuration::updateValue(self::CONF_REFUND_ON_SLIP, 1)
             && $this->installDb()
             && $this->installOrderState();
     }
@@ -74,14 +79,14 @@ class Cigalpay extends PaymentModule
     public function uninstall()
     {
         // Tables and the order state stay: orders reference them.
-        foreach ([self::CONF_ACCOUNT_ID, self::CONF_IPN_SECRET, self::CONF_DEBUG, self::CONF_CHECKOUT_URL] as $key) {
+        foreach ([self::CONF_ACCOUNT_ID, self::CONF_IPN_SECRET, self::CONF_API_KEY, self::CONF_REFUND_ON_SLIP, self::CONF_DEBUG, self::CONF_CHECKOUT_URL, self::CONF_MERCHANT_API_URL] as $key) {
             Configuration::deleteByName($key);
         }
 
         return parent::uninstall();
     }
 
-    private function installDb()
+    public function installDb()
     {
         $p = _DB_PREFIX_;
         $engine = _MYSQL_ENGINE_;
@@ -104,6 +109,15 @@ class Cigalpay extends PaymentModule
                 `id_order` INT UNSIGNED NOT NULL,
                 `date_add` DATETIME NOT NULL,
                 PRIMARY KEY (`payment_id`, `status`)
+            ) ENGINE={$engine} DEFAULT CHARSET=utf8mb4")
+            // Credit slips refunded in crypto, so a slip is never refunded twice.
+            && Db::getInstance()->execute("CREATE TABLE IF NOT EXISTS `{$p}cigalpay_refund` (
+                `id_order_slip` INT UNSIGNED NOT NULL,
+                `id_order` INT UNSIGNED NOT NULL,
+                `refund_id` VARCHAR(64) NOT NULL,
+                `date_add` DATETIME NOT NULL,
+                PRIMARY KEY (`id_order_slip`),
+                KEY `id_order` (`id_order`)
             ) ENGINE={$engine} DEFAULT CHARSET=utf8mb4");
     }
 
@@ -139,6 +153,7 @@ class Cigalpay extends PaymentModule
         if (Tools::isSubmit('submitCigalpay')) {
             $accountId = trim((string) Tools::getValue(self::CONF_ACCOUNT_ID));
             $secret = trim((string) Tools::getValue(self::CONF_IPN_SECRET));
+            $apiKey = trim((string) Tools::getValue(self::CONF_API_KEY));
             if ($accountId !== '' && !preg_match('/^[0-9a-f-]{36}$/i', $accountId)) {
                 $output .= $this->displayError($this->trans('The Account ID looks wrong: copy it from Settings → API credentials in your CigalPay dashboard.', [], 'Modules.Cigalpay.Admin'));
             } else {
@@ -147,6 +162,10 @@ class Cigalpay extends PaymentModule
                 if ($secret !== '') {
                     Configuration::updateValue(self::CONF_IPN_SECRET, $secret);
                 }
+                if ($apiKey !== '') {
+                    Configuration::updateValue(self::CONF_API_KEY, $apiKey);
+                }
+                Configuration::updateValue(self::CONF_REFUND_ON_SLIP, (int) Tools::getValue(self::CONF_REFUND_ON_SLIP));
                 Configuration::updateValue(self::CONF_DEBUG, (int) Tools::getValue(self::CONF_DEBUG));
                 $output .= $this->displayConfirmation($this->trans('Settings saved.', [], 'Modules.Cigalpay.Admin'));
             }
@@ -185,6 +204,25 @@ class Cigalpay extends PaymentModule
                             : $this->trans('Same page. Used to check that payment notifications really come from CigalPay.', [], 'Modules.Cigalpay.Admin'),
                     ],
                     [
+                        'type' => 'password',
+                        'label' => $this->trans('API key', [], 'Modules.Cigalpay.Admin'),
+                        'name' => self::CONF_API_KEY,
+                        'desc' => Configuration::get(self::CONF_API_KEY)
+                            ? $this->trans('Saved. Leave empty to keep it.', [], 'Modules.Cigalpay.Admin')
+                            : $this->trans('Same page. Only needed to refund orders in crypto.', [], 'Modules.Cigalpay.Admin'),
+                    ],
+                    [
+                        'type' => 'switch',
+                        'label' => $this->trans('Refund in crypto', [], 'Modules.Cigalpay.Admin'),
+                        'name' => self::CONF_REFUND_ON_SLIP,
+                        'is_bool' => true,
+                        'desc' => $this->trans('When you refund a CigalPay order with a credit slip, refund the customer in the coin they paid, from your CigalPay balance. They get an email to enter their address.', [], 'Modules.Cigalpay.Admin'),
+                        'values' => [
+                            ['id' => 'refund_on', 'value' => 1, 'label' => $this->trans('Yes', [], 'Admin.Global')],
+                            ['id' => 'refund_off', 'value' => 0, 'label' => $this->trans('No', [], 'Admin.Global')],
+                        ],
+                    ],
+                    [
                         'type' => 'switch',
                         'label' => $this->trans('Debug log', [], 'Modules.Cigalpay.Admin'),
                         'name' => self::CONF_DEBUG,
@@ -210,6 +248,8 @@ class Cigalpay extends PaymentModule
         $helper->fields_value = [
             self::CONF_ACCOUNT_ID => Tools::getValue(self::CONF_ACCOUNT_ID, Configuration::get(self::CONF_ACCOUNT_ID)),
             self::CONF_IPN_SECRET => '',
+            self::CONF_API_KEY => '',
+            self::CONF_REFUND_ON_SLIP => (int) Configuration::get(self::CONF_REFUND_ON_SLIP),
             self::CONF_DEBUG => (int) Configuration::get(self::CONF_DEBUG),
         ];
 
@@ -426,6 +466,85 @@ class Cigalpay extends PaymentModule
             }
             $this->note($o, $note);
         }
+    }
+
+    // ── Refunds ───────────────────────────────────────────────────────────
+
+    /**
+     * A credit slip was created (partial or standard refund): refund its
+     * amount in crypto, from the CigalPay balance. The slip can't be undone
+     * from here, so a refund CigalPay refuses is reported in the order's
+     * messages for the shop to handle.
+     */
+    public function hookActionOrderSlipAdd($params)
+    {
+        $order = isset($params['order']) ? $params['order'] : null;
+        if (!$order instanceof Order || $order->module !== $this->name || !Configuration::get(self::CONF_REFUND_ON_SLIP)) {
+            return;
+        }
+        $p = _DB_PREFIX_;
+        $slip = Db::getInstance()->getRow("SELECT s.`id_order_slip`, s.`total_products_tax_incl`, s.`total_shipping_tax_incl` FROM `{$p}order_slip` s
+            LEFT JOIN `{$p}cigalpay_refund` r ON r.`id_order_slip` = s.`id_order_slip`
+            WHERE s.`id_order` = " . (int) $order->id . ' AND r.`id_order_slip` IS NULL ORDER BY s.`id_order_slip` DESC');
+        if (!$slip) {
+            return;
+        }
+        $amount = round((float) $slip['total_products_tax_incl'] + (float) $slip['total_shipping_tax_incl'], 2);
+        $currency = strtoupper((new Currency((int) $order->id_currency))->iso_code);
+
+        $paymentId = '';
+        foreach ($order->getOrderPaymentCollection() as $payment) {
+            $paymentId = $paymentId ?: (string) $payment->transaction_id;
+        }
+        if (!$order->hasBeenPaid() || $paymentId === '' || $amount <= 0) {
+            return;
+        }
+        // "Generate a voucher" in the refund form: the customer is refunded with a voucher, not in crypto too.
+        $form = Tools::getValue('cancel_product');
+        if (is_array($form) && !empty($form['voucher'])) {
+            $this->note($order, sprintf('CigalPay: credit slip of %s %s refunded with a voucher, so not in crypto.', $amount, $currency));
+
+            return;
+        }
+        $apiKey = trim((string) Configuration::get(self::CONF_API_KEY));
+        if ($apiKey === '') {
+            $this->note($order, sprintf('CigalPay: credit slip of %s %s not refunded in crypto: add your API key in the CigalPay module settings, or refund the customer from your CigalPay dashboard.', $amount, $currency));
+
+            return;
+        }
+
+        $options = ['apiKey' => $apiKey];
+        if (Configuration::get(self::CONF_MERCHANT_API_URL)) {
+            $options['merchantApiUrl'] = Configuration::get(self::CONF_MERCHANT_API_URL);
+        }
+        $customer = new Customer((int) $order->id_customer);
+        try {
+            $res = (new CigalPaySdk($options))->createRefund([
+                'paymentId' => $paymentId,
+                'checkoutAmount' => $amount,
+                'customerEmail' => $customer->email,
+                'reason' => Tools::substr(sprintf('Order %s, credit slip %d', $order->reference, $slip['id_order_slip']), 0, 200),
+            ]);
+        } catch (CigalpayException $e) {
+            $this->log(3, sprintf('Order %d: refund of %s %s refused: %s', $order->id, $amount, $currency, $e->getMessage()), $order->id);
+            $this->note($order, sprintf('CigalPay: the credit slip of %s %s was not refunded in crypto: %s', $amount, $currency, $e->getMessage()));
+
+            return;
+        }
+        $refund = isset($res['refund']) && is_array($res['refund']) ? $res['refund'] : [];
+        Db::getInstance()->insert('cigalpay_refund', [
+            'id_order_slip' => (int) $slip['id_order_slip'],
+            'id_order' => (int) $order->id,
+            'refund_id' => pSQL(isset($refund['id']) ? (string) $refund['id'] : ''),
+            'date_add' => date('Y-m-d H:i:s'),
+        ]);
+        $this->note($order, sprintf(
+            'CigalPay: refund of %s %s started (%s). The customer got an email to enter their address: %s. CigalPay sends it once reviewed.',
+            $amount,
+            $currency,
+            $this->coinAmount(isset($refund['amount']) ? $refund['amount'] : '', ['currency' => isset($refund['currency']) ? $refund['currency'] : '']),
+            isset($res['link']) ? $res['link'] : ''
+        ));
     }
 
     /** The orders of the cart (PrestaShop splits some carts; they share a reference). */

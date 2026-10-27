@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.0
+
+- Refunds in crypto: a credit slip on a CigalPay order refunds the customer in the coin they paid, from the CigalPay balance. The customer gets an email to enter their address. Needs the new API key setting; can be turned off.
+
 ## 1.0.1
 
 - The settings page renders the notification address from a template, escaped.
