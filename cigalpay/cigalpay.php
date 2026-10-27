@@ -39,7 +39,7 @@ class Cigalpay extends PaymentModule
     {
         $this->name = 'cigalpay';
         $this->tab = 'payments_gateways';
-        $this->version = '1.0.0';
+        $this->version = '1.0.1';
         $this->author = 'CigalPay';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '8.0.0', 'max' => _PS_VERSION_];
@@ -218,9 +218,9 @@ class Cigalpay extends PaymentModule
 
     private function renderNotifyUrl()
     {
-        return '<div class="panel"><p>'
-            . $this->trans('Payment notifications are sent to this address automatically, nothing to set up:', [], 'Modules.Cigalpay.Admin')
-            . ' <code>' . htmlspecialchars($this->notifyUrl(), ENT_QUOTES, 'UTF-8') . '</code></p></div>';
+        $this->context->smarty->assign('cigalpay_notify_url', $this->notifyUrl());
+
+        return $this->display(__FILE__, 'views/templates/admin/notify_url.tpl');
     }
 
     // ── Checkout ──────────────────────────────────────────────────────────
