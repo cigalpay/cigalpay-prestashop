@@ -26,6 +26,9 @@ use PrestaShop\PrestaShop\Core\Payment\PaymentOption;
 class Cigalpay extends PaymentModule
 {
     const CURRENCIES = ['USD', 'EUR'];
+
+    /** CigalPay's largest payment, in the cart currency (USD or EUR). */
+    const MAX_AMOUNT = 5000;
     const LANGS = ['en', 'fr', 'es', 'de'];
 
     /** Configuration keys. The *_URL ones are not in the form: tests point them at a local API. */
@@ -42,7 +45,7 @@ class Cigalpay extends PaymentModule
     {
         $this->name = 'cigalpay';
         $this->tab = 'payments_gateways';
-        $this->version = '1.1.0';
+        $this->version = '1.1.1';
         $this->author = 'CigalPay';
         $this->need_instance = 0;
         $this->ps_versions_compliancy = ['min' => '8.0.0', 'max' => _PS_VERSION_];
@@ -277,6 +280,10 @@ class Cigalpay extends PaymentModule
         }
         $currency = new Currency((int) $params['cart']->id_currency);
         if (!in_array(strtoupper($currency->iso_code), self::CURRENCIES, true)) {
+            return [];
+        }
+        // Hidden above CigalPay's limit, instead of failing after the customer picks it.
+        if ((float) $params['cart']->getOrderTotal(true, Cart::BOTH) > self::MAX_AMOUNT) {
             return [];
         }
 

@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.1.1
+
+- CigalPay is hidden at checkout for carts above 5,000 USD or EUR, the largest payment CigalPay accepts.
+
 ## 1.1.0
 
 - Refunds in crypto: a credit slip on a CigalPay order refunds the customer in the coin they paid, from the CigalPay balance. The customer gets an email to enter their address. Needs the new API key setting; can be turned off.
